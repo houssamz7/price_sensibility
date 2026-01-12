@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.vscode/
+
+# data
+data/raw/
+data/clean/
+
+# models
+models/
+
+# env
+.env
+.venv/
