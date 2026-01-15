@@ -4,6 +4,3 @@ matplotlib
 streamlit
 scikit-learn
 joblib
-sys
-pathlib
-io
