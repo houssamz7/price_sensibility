@@ -2,6 +2,10 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from src.pipeline_clean import build_clean_dataset_from_df
 

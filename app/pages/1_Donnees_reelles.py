@@ -1,144 +1,188 @@
+# app/pages/1_Donnees_reelles.py
 import streamlit as st
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import sys
 from pathlib import Path
 
-# Ajoute la racine du projet (qui contient "src") au PYTHONPATH
-ROOT = Path(__file__).resolve().parents[2]   # = dossier PROJET_SENSIBILITE_PRIX
-sys.path.insert(0, str(ROOT))
-
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 
 from src.analytics import (
-    add_event_weight,
     apply_filters,
     aggregate_curve,
-    compute_reference_and_best
+    compute_reference_and_best,
+    replace_event_period_with_other_years
 )
 
-st.title("Dashboard - Données réelles")
+st.title("Données réelles — Dashboard")
 
-# Cache : Streamlit ne relit pas le fichier à chaque interaction
 
-@st.cache_data
-def load_clean(path: str) -> pd.DataFrame:
-    return pd.read_csv(path, sep="\t", encoding="utf-16")
+# Récupérer les données CLEAN depuis la page principale
+if "df_clean_final" not in st.session_state:
+    st.warning("Va d'abord sur la page **Home** pour uploader le fichier et générer le CLEAN.")
+    st.stop()
 
-df = load_clean("data/clean/Projet_Sensibilite_Prix_clean.csv")
+df = st.session_state["df_clean_final"].copy()
 
-# Sidebar : filtres utilisateur
+# Par sécurité : dates en datetime
+df["Arrival Date"] = pd.to_datetime(df["Arrival Date"])
+df["Reservation Date"] = pd.to_datetime(df["Reservation Date"])
+df["Departure Date"] = pd.to_datetime(df["Departure Date"])
+
+
+# Sidebar - Filtres
 st.sidebar.header("Filtres")
 
-# On ajoute les éléments à filtrer
-property_ = st.sidebar.selectbox(
-    "Propoerty",
-    ["All"] + sorted(df["Property"].astype(str).unique().tolist())
+property_ = st.sidebar.selectbox("Property", ["All"] + sorted(df["Property"].astype(str).unique().tolist()))
+mc = st.sidebar.selectbox("Market Code", ["All"] + sorted(df["Market Code"].astype(str).unique().tolist()))
+rt = st.sidebar.selectbox("Room Type", ["All"] + sorted(df["Room Type"].astype(str).unique().tolist()))
+sc = st.sidebar.selectbox("Source Code", ["All"] + sorted(df["Source Code"].astype(str).unique().tolist()))
 
-)
-
-mc = st.sidebar.selectbox(
-    "Market Code",
-    ["All"] + sorted(df["Market Code"].astype(str).unique().tolist())
-)
-
-rt = st.sidebar.selectbox(
-    "Room Type",
-    ["All"] + sorted(df["Room Type"].astype(str).unique().tolist())
-)
-
-sc = st.sidebar.selectbox(
-    "Source Code",
-    ["All"] + sorted(df["Source Code"].astype(str).unique().tolist())
-)
-
+# une seule courbe : Season est un filtre
 season = st.sidebar.selectbox("Season", ["All", "LOW", "HIGH"])
 
-month_num = st.sidebar.selectbox(
-    "Month Number",
-    ["All"] + sorted(df["Month Number"].dropna().astype(int).unique().tolist())
+# Nationality (multi)
+nationalities = st.sidebar.multiselect(
+    "Nationality",
+    sorted(df["Nationality"].astype(str).unique().tolist())
 )
 
-weekday = st.sidebar.selectbox(
-    "Weekday",
-    ["All"] + sorted(df["Weekday"].astype(str).unique().tolist())
+# Lead Time (Days)
+lt_col = "Lead Time(Days)"
+if lt_col in df.columns:
+    lt_min = int(np.nanmin(df[lt_col]))
+    lt_max = int(np.nanmax(df[lt_col]))
+    lead_range = st.sidebar.slider("Lead Time(Days)", lt_min, lt_max, (lt_min, lt_max))
+else:
+    lead_range = None
+    st.sidebar.info("Colonne 'Lead Time(Days)' non trouvée dans le fichier.")
 
+# Filtre date (plage réelle)
+date_field = st.sidebar.selectbox("Date utilisée", ["Arrival Date", "Reservation Date", "Departure Date"])
+dmin = pd.to_datetime(df[date_field]).min().date()
+dmax = pd.to_datetime(df[date_field]).max().date()
+# date_range = st.sidebar.date_input("Plage de dates", (dmin, dmax))
+
+# Filtre "jours du mois" (1->13, 25->30, etc.)
+day_min, day_max = st.sidebar.slider("Jour du mois (ex: 1→13)", 1, 31, (1, 31))
+
+# Filtre "mois" (pour faire 25→30 janvier)
+months = st.sidebar.multiselect(
+    "Mois (optionnel)",
+    options=list(range(1, 13)),
+    format_func=lambda x: pd.Timestamp(year=2024, month=x, day=1).strftime("%B"),
+    default=[]
 )
 
-event_mode = st.sidebar.selectbox(
-    "Gestion Event",
-    ["downweight", "exclude", "include_full"]
-)
-
-y_mode = st.sidebar.selectbox(
-    "Axe Y",
-    ["reservations", "nights", "revenue"]
-)
-
-bin_size = st.sidebar.slider("Taille bins (Transches de prix) ADR (€)", 5, 50, 15, 5)
-# Choisir le prix de référence
+# Courbe options
+y_mode = st.sidebar.selectbox("Axe Y", ["reservations", "nights", "revenue"])
+bin_size = st.sidebar.slider("Bins ADR (€)", 5, 50, 15, 5)
 reference_mode = st.sidebar.selectbox("Prix de référence", ["median", "mean"])
 
-# Pipeline : pondération + filtre
-df2 = add_event_weight(df, mode=event_mode)
 
-# Construction du dictionnaire filters, 
-# L’utilisateur choisit dans la sidebar des valeurs : 
-# soit une valeur précise (ex: PARHDC), soit “All” (ça veut dire : pas de filtre)
-# Donc ici on construit un dictionnaire où : si l’utilisateur a choisi All -> on met None (ça veut dire : “ne filtre pas”), sinon on met la valeur choisie
+# Gestion Event (nouvelle logique)
+st.sidebar.header("Gestion Event")
 
+event_mode = st.sidebar.selectbox(
+    "Traitement des events",
+    [
+        "Inclure (normal)",
+        "Exclure (retirer les lignes event)",
+        "Remplacer par moyenne autres années"
+    ]
+)
+
+# Si remplacement: choisir quel event remplacer
+events_available = sorted([e for e in df["Event"].astype(str).unique().tolist() if e != "None"])
+event_to_replace = None
+if event_mode == "Remplacer par moyenne autres années":
+    event_to_replace = st.sidebar.selectbox(
+        "Quel event remplacer ?",
+        options=events_available if events_available else ["(aucun event trouvé)"]
+    )
+
+
+# Application des filtres
 filters = {
     "Property": None if property_ == "All" else property_,
     "Market Code": None if mc == "All" else mc,
-    "Room Type": None if rt == "All" else rt,
+    "Room Type": None if mc == "All" else rt,
     "Source Code": None if sc == "All" else sc,
     "Season": None if season == "All" else season,
-    "Month Number": None if month_num == "All" else int(month_num),
-    "Weekday": None if weekday == "All" else weekday,
 }
+df2 = apply_filters(df, filters)
 
-# On utilise la fonction apply filters déjà définie sur analytics.py
-df2 = apply_filters(df2, filters)
-# Afficher le nombre avec des virgules (séparateur de miliers) pour le rendre plus lisible, ** c'est pour rendre gras streamlit
-st.write(f"Lignes après filtres : **{len(df2):,}**")
-# Warning si peu de données
-if len(df2) < 200:
-    st.warning("Peu de données après filtres : la courbe est moins stable!")
+# Nationality
+if len(nationalities) > 0:
+    df2 = df2[df2["Nationality"].astype(str).isin(nationalities)]
 
-# Construire la courbe sulement si on a assez de lignes (20 lignes ou plus)
-if len(df2) >= 20:
-    agg = aggregate_curve(df2, bin_size=bin_size, y_mode=y_mode)
+# Lead time
+if lead_range is not None:
+    df2 = df2[(df2[lt_col] >= lead_range[0]) & (df2[lt_col] <= lead_range[1])]
 
-    st.subheader("Courbe Prix -> " + y_mode)
-    # Affichage de la courbe
-    fig = plt.figure(figsize=(9, 5))
-    plt.plot(agg["ADR_mean"], agg["Y"], marker="o")
-    plt.title(f"Sensibilité prix - {y_mode}")
-    plt.xlabel("Prix d'une nuit (€)")
-    # Récupère le libellé de l’axe Y depuis la colonne "Y_label"
-    # - .iloc[0] : on prend la première valeur (le libellé est identique pour toutes les lignes)
-    # - if len(agg) else "Y" : sécurité si le DataFrame est vide (évite une erreur)
-    plt.ylabel(agg["Y_label"].iloc[0] if len(agg) else "Y")
-    plt.grid(True)
-    # Afficher le graphique dans Streamlit
-    st.pyplot(fig)
-    # Montrer le tableau agrégé, utile pour vérifier
-    st.dataframe(agg)
+# Date range (sur date_field)
+# start_date, end_date = date_range
+# start_date = pd.to_datetime(start_date)
+# end_date = pd.to_datetime(end_date)
+# df2 = df2[(df2[date_field] >= start_date) & (df2[date_field] <= end_date)]
 
-    # Calcul “prix optimal & gain vs référence”, res est un dictionnaire
-    res = compute_reference_and_best(agg, reference_mode)
+# Jour du mois
+df2 = df2[(df2[date_field].dt.day >= day_min) & (df2[date_field].dt.day <= day_max)]
 
-    # Si le dictionnaire n'est pas vide, on a des résultats à afficher, sinon rien n'est affiché
-    if res:
-        # On crée 3 colonnes dans l'interface Streamlit, Juste pour afficher 3 chiffres côte à côte
-        c1, c2, c3 = st.columns(3)
-        # Metric dans streamlit affiche un badge KPI avec un titre, valeur, et une variation
-        # res['ref_price'] : récupère la valeur du dictionnaire
-        # :.0f : format float sans décimales, .1f = une décimale
-        c1.metric("Prix de référence", f"{res['ref_price']:.0f} €")
-        c2.metric("Meilleur prix (hist.)", f"{res['best_price']:.0f} €")
-        c3.metric("Gain potentiel (bin)", f"{res['gain']:,.0f} €", f"{res['gain_pct']:.1f}%")
-    else : 
-        st.info("Pas assez de données pour calculer l’optimum.")
+# Mois (si sélectionné)
+if len(months) > 0:
+    df2 = df2[df2[date_field].dt.month.isin(months)]
+
+# On crée weight=1 (utile si plus tard tu veux pondérer)
+df2["weight"] = 1.0
+
+
+# Traitement events selon choix
+info_msg = None
+if event_mode == "Exclure (retirer les lignes event)":
+    df2 = df2[df2["Event"] == "None"].copy()
+elif event_mode == "Remplacer par moyenne autres années":
+    if events_available and event_to_replace and "(aucun" not in event_to_replace:
+        df2, info_msg = replace_event_period_with_other_years(df2, event_to_replace, date_col="Arrival Date")
+    else:
+        st.warning("Aucun event à remplacer.")
+        df2 = df2.copy()
+
+st.write(f" Lignes après filtres : **{len(df2):,}**")
+if info_msg:
+    st.info(info_msg)
+
+
+# Affichage résultats
+if len(df2) < 20:
+    st.warning("Pas assez de données après filtres pour tracer une courbe.")
+    st.dataframe(df2.head(200))
+    st.stop()
+
+agg = aggregate_curve(df2, bin_size=bin_size, y_mode=y_mode)
+
+# Courbe (une seule)
+st.subheader("Courbe (une seule)")
+fig = plt.figure(figsize=(9, 5))
+plt.plot(agg["ADR_mean"], agg["Y"], marker="o")
+plt.xlabel("ADR (€)")
+plt.ylabel(agg["Y_label"].iloc[0] if len(agg) else "Y")
+plt.grid(True)
+st.pyplot(fig)
+
+# Table agrégée
+st.subheader("Table agrégée")
+st.dataframe(agg)
+
+# Prix optimal + gain
+st.subheader("Prix optimal & gain vs référence")
+res = compute_reference_and_best(agg, reference=reference_mode)
+if res:
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Prix de référence", f"{res['ref_price']:.0f} €")
+    c2.metric("Meilleur prix (hist.)", f"{res['best_price']:.0f} €")
+    c3.metric("Gain (bin)", f"{res['gain']:,.0f} €", f"{res['gain_pct']:.1f}%")
 else:
-    st.info("Pas assez de lignes pour construire une courbe (min 20 lignes).")
+    st.info("Pas assez de données pour calculer un optimum.")
