@@ -29,7 +29,7 @@ L’outil est accessible via une application web Streamlit.
    - Lead Time
    - Période calendaire
 5. Visualiser :
-   - une courbe unique Prix → Y
+   - une courbe unique Prix -> Y
    - un tableau agrégé
    - un prix optimal et un gain potentiel
 
