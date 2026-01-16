@@ -17,6 +17,23 @@ from src.analytics import (
 # - Courbe de sensibilité + Top Nationalities + Saisonnalité (heatmap)
 
 
+# Mapping Segment -> Market Codes
+# (utilisé pour filtrer plus facilement côté RM)
+SEGMENT_TO_MARKET_CODES = {
+    "Indiv. Public": [
+        "3CNR", "3CRE", "3FLA", "3NNR", "3NRE",
+        "PBAR", "PDIS", "PPKG", "PPRO", "PRES"
+    ],
+    "Indiv. Negocié": ["NCON", "NEMB", "NGLO", "NLOC"],
+    "Equipages": ["GCME", "GCRE"],
+    "Groupe Affaires": ["ETNMT", "GBAH", "GBCE", "GBDI", "GBIN", "GBSE", "GBSP", "GCAS"],
+    "Groupe Loisirs": ["GLOI", "GLTS"],
+    "Indiv Tour Operator": ["ITOU"],
+    "Interne": ["OHOU"],
+    "Offert": ["OCOM"],
+}
+
+
 st.title("Données réelles - Dashboard")
 
 # 0) Récupérer les données CLEAN (préparées depuis Home)
@@ -42,7 +59,21 @@ for c in ["Arrival Date", "Reservation Date", "Departure Date"]:
 st.sidebar.header("Filtres")
 
 property_ = st.sidebar.selectbox("Property", ["All"] + sorted(df["Property"].astype(str).unique().tolist()))
-mc = st.sidebar.selectbox("Market Code", ["All"] + sorted(df["Market Code"].astype(str).unique().tolist()))
+
+# Nouveau filtre 1 : Segment (général)
+segment_options = ["All"] + sorted(SEGMENT_TO_MARKET_CODES.keys())
+segment = st.sidebar.selectbox("Segment", segment_options)
+
+# Nouveau filtre 2 : Market Code (dépend du Segment choisi)
+# - Si Segment = All -> on propose tous les market codes
+# - Si Segment = X -> on propose uniquement les market codes du segment X
+if segment == "All":
+    market_code_options = ["All"] + sorted(df["Market Code"].astype(str).unique().tolist())
+else:
+    market_code_options = ["All"] + SEGMENT_TO_MARKET_CODES.get(segment, [])
+
+mc = st.sidebar.selectbox("Market Code", market_code_options)
+
 rt = st.sidebar.selectbox("Room Type", ["All"] + sorted(df["Room Type"].astype(str).unique().tolist()))
 sc = st.sidebar.selectbox("Source Code", ["All"] + sorted(df["Source Code"].astype(str).unique().tolist()))
 
@@ -111,12 +142,26 @@ if event_mode == "Remplacer par moyenne autres années":
 
 filters = {
     "Property": None if property_ == "All" else property_,
-    "Market Code": None if mc == "All" else mc,
     "Room Type": None if mc == "All" else rt,
     "Source Code": None if sc == "All" else sc,
     "Season": None if season == "All" else season,
 }
 df2 = apply_filters(df, filters)
+
+
+# Application du filtre Segment / Market Code
+# Règle :
+# - Si Segment choisi et Market Code = All => on garde tous les codes du segment
+# - Si Market Code choisi (même si Segment=All) => on filtre sur ce code
+if segment != "All" and mc == "All":
+    # Filtrage large : tout le segment
+    allowed_codes = SEGMENT_TO_MARKET_CODES.get(segment, [])
+    df2 = df2[df2["Market Code"].astype(str).isin(allowed_codes)]
+
+elif mc != "All":
+    # Filtrage précis : un seul market code
+    df2 = df2[df2["Market Code"].astype(str) == str(mc)]
+
 
 # Nationality
 if len(nationalities) > 0:
