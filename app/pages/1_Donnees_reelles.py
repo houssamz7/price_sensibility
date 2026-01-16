@@ -137,6 +137,19 @@ if event_mode == "Remplacer par moyenne autres années":
         options=events_available if events_available else ["(aucun event trouvé)"]
     )
 
+st.sidebar.header("Affichage")
+
+zoom_mode = st.sidebar.selectbox(
+    "Zoom ADR",
+    ["Auto (1%-99%)", "Tout afficher"]
+)
+
+show_outliers = st.sidebar.checkbox(
+    "Afficher les outliers (axe complet)",
+    value=False
+)
+
+
 
 # 3) Application des filtres
 
@@ -232,7 +245,19 @@ with tab1:
     plt.xlabel("ADR (euros)")
     plt.ylabel(agg["Y_label"].iloc[0] if len(agg) else "Y")
     plt.grid(True)
+
+
+    # ZOOM intelligent (anti-outliers)
+    adr_vals = agg["ADR_mean"].to_numpy(dtype=float)
+
+    if (zoom_mode == "Auto (1%-99%)") and (not show_outliers):
+        xmin = float(np.nanpercentile(adr_vals, 1))
+        xmax = float(np.nanpercentile(adr_vals, 99))
+        plt.xlim(xmin, xmax)
+    # sinon, on laisse matplotlib afficher tout l'axe automatiquement
+
     st.pyplot(fig)
+
 
     st.subheader("Prix optimal et comparaison au prix de référence")
     res = compute_reference_and_best(agg, reference=reference_mode)

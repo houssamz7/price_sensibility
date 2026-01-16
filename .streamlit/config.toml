@@ -1,2 +1,7 @@
+[theme]
+base="light"
+
 [server]
-runOnSave = true
+headless=true
+enableCORS=false
+enableXsrfProtection=true

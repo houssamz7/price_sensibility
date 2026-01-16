@@ -1,16 +1,29 @@
+# Python
 __pycache__/
 *.pyc
-.ipynb_checkpoints/
-.vscode/
-*.csv
+*.pyo
+*.pyd
 
-# data
+# Env / venv / conda
+.venv/
+venv/
+.env/
+.conda/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Data
 data/raw/
 data/clean/
+*.csv
+*.tsv
 
-# models
-models/
+# Models
+models/*.joblib
 
-# env
-.env
-.venv/
+# Streamlit
+.streamlit/secrets.toml
