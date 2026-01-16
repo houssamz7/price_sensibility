@@ -1,18 +1,13 @@
 # app/pages/1_Donnees_reelles.py
 # ============================================================
-# PAGE STREAMLIT — DONNEES REELLES (V1)
+# DONNEES REELLES (V1) - Page Streamlit
 # ============================================================
-# Cette page sert à analyser la sensibilité au prix à partir des
-# données historiques (export R&A -> nettoyage -> df_clean_final).
-#
-# L'utilisateur (RM) :
-# - applique des filtres (Property, Segment, dates, etc.)
-# - obtient une courbe "ADR vs Volume/Nuitées/Revenue"
-# - obtient un prix de référence + un "meilleur prix historique"
-# - peut afficher une table d'agrégation (debug) si besoin
-#
-# IMPORTANT :
-# df_clean_final est créé sur la page Home (streamlit_app.py).
+# Objectifs :
+# 1) Filtrer les données (Property, Segment, dates, etc.)
+# 2) Tracer la courbe de sensibilité prix (ADR vs Y)
+# 3) Calculer un prix de référence (pondéré par nuitées) + meilleur prix historique
+# 4) Afficher 2 visuels simples (Top Nationalities, Saisonnalité heatmap)
+# 5) Avoir des outils debug (table agg et top bins) masqués par défaut
 # ============================================================
 
 import streamlit as st
@@ -30,15 +25,8 @@ from src.analytics import (
 st.title("Données réelles")
 
 # ============================================================
-# 0) SEGMENTS : mapping Segment -> Market Codes
+# 0) Segments : mapping Segment -> Market Codes
 # ============================================================
-# Pourquoi ?
-# - Un RM pense en "Segment" (ex: Indiv. Public)
-# - Mais il peut aussi vouloir un "Market Code" précis
-#
-# On propose donc 2 filtres liés :
-# 1) Segment
-# 2) Market Code (limité aux codes du segment choisi)
 SEGMENT_TO_MARKET_CODES = {
     "Indiv. Public": [
         "3CNR", "3CRE", "3FLA", "3NNR", "3NRE",
@@ -53,7 +41,6 @@ SEGMENT_TO_MARKET_CODES = {
     "Equipages": ["GCME", "GCRE"],
 }
 
-# Ordre d'affichage demandé pour le filtre Segment
 SEGMENT_ORDER = [
     "Indiv. Public",
     "Indiv. Negocié",
@@ -66,121 +53,104 @@ SEGMENT_ORDER = [
 ]
 
 # ============================================================
-# 1) CHARGER LES DONNEES CLEAN
+# 1) Charger le dataset clean depuis session_state
 # ============================================================
-# Si la page Home n'a pas été utilisée, df_clean_final n'existe pas
 if "df_clean_final" not in st.session_state:
     st.warning("Va d'abord sur la page Home pour uploader le fichier et générer le CLEAN.")
     st.stop()
 
 df = st.session_state["df_clean_final"].copy()
 
-# Assurer que les colonnes date sont bien en datetime
+# Sécurité : dates en datetime
 for c in ["Arrival Date", "Reservation Date", "Departure Date"]:
     if c in df.columns:
         df[c] = pd.to_datetime(df[c], errors="coerce")
 
 # ============================================================
-# 2) SIDEBAR : FILTRES
+# 2) Sidebar : filtres
 # ============================================================
 st.sidebar.header("Filtres")
 
-# -----------------------------
-# 2.1 Property
-# -----------------------------
+# --- Property (1 choix)
 property_ = st.sidebar.selectbox(
     "Property",
     ["All"] + sorted(df["Property"].astype(str).unique().tolist())
 )
 
-# -----------------------------
-# 2.2 Segment (ordre imposé)
-# -----------------------------
+# --- Segment (1 choix) : logique RM => un segment à la fois
 segment_options = ["All"] + [s for s in SEGMENT_ORDER if s in SEGMENT_TO_MARKET_CODES]
 segment = st.sidebar.selectbox("Segment", segment_options)
 
-# -----------------------------
-# 2.3 Market Code (dépend du Segment)
-# -----------------------------
+# --- Market Code (multi)
+# Si Segment = All -> on propose tous les codes
+# Sinon -> seulement les codes du segment choisi
 if segment == "All":
-    mc_options = ["All"] + sorted(df["Market Code"].astype(str).unique().tolist())
+    mc_pool = sorted(df["Market Code"].astype(str).unique().tolist())
 else:
-    mc_options = ["All"] + SEGMENT_TO_MARKET_CODES.get(segment, [])
-mc = st.sidebar.selectbox("Market Code", mc_options)
+    mc_pool = SEGMENT_TO_MARKET_CODES.get(segment, [])
 
-# -----------------------------
-# 2.4 Room Type
-# -----------------------------
-room_type = st.sidebar.selectbox(
-    "Room Type",
-    ["All"] + sorted(df["Room Type"].astype(str).unique().tolist())
+market_codes = st.sidebar.multiselect(
+    "Market Code (multi)",
+    options=mc_pool,
+    default=[],
+    help="Tu peux choisir 1 ou plusieurs Market Codes. Si tu ne choisis rien => on prend tout."
 )
 
-# -----------------------------
-# 2.5 Source Code
-# -----------------------------
-sc = st.sidebar.selectbox(
-    "Source Code",
-    ["All"] + sorted(df["Source Code"].astype(str).unique().tolist())
+# --- Room Type (multi)
+room_type_pool = sorted(df["Room Type"].astype(str).unique().tolist())
+room_types = st.sidebar.multiselect(
+    "Room Type (multi)",
+    options=room_type_pool,
+    default=[],
+    help="Si vide => tous les Room Types"
 )
 
-# -----------------------------
-# 2.6 Season
-# -----------------------------
+# --- Source Code (multi)
+sc_pool = sorted(df["Source Code"].astype(str).unique().tolist())
+source_codes = st.sidebar.multiselect(
+    "Source Code (multi)",
+    options=sc_pool,
+    default=[],
+    help="Si vide => toutes les sources"
+)
+
+# --- Season (1 choix)
 season = st.sidebar.selectbox("Season", ["All", "LOW", "HIGH"])
 
-# -----------------------------
-# 2.7 Nationality (multi)
-# -----------------------------
+# --- Nationality (multi)
+nat_pool = sorted(df["Nationality"].astype(str).unique().tolist())
 nationalities = st.sidebar.multiselect(
-    "Nationality",
-    sorted(df["Nationality"].astype(str).unique().tolist())
+    "Nationality (multi)",
+    options=nat_pool,
+    default=[]
 )
 
-# -----------------------------
-# 2.8 Lead Time (Days) (nom exact colonne)
-# -----------------------------
+# --- Lead Time (Days)
 lt_col = "Lead Time(Days)"
 lead_range = None
 if lt_col in df.columns:
     lt_min = int(np.nanmin(df[lt_col]))
     lt_max = int(np.nanmax(df[lt_col]))
-    lead_range = st.sidebar.slider(
-        "Lead Time (Days)",
-        lt_min, lt_max,
-        (lt_min, lt_max)
-    )
+    lead_range = st.sidebar.slider("Lead Time (Days)", lt_min, lt_max, (lt_min, lt_max))
 else:
-    st.sidebar.info(f"Colonne '{lt_col}' non trouvée dans le fichier.")
+    st.sidebar.info(f"Colonne '{lt_col}' non trouvée.")
 
-# -----------------------------
-# 2.9 Date utilisée (Arrival/Reservation/Departure)
-# -----------------------------
-date_field = st.sidebar.selectbox(
-    "Date utilisée",
-    ["Arrival Date", "Reservation Date", "Departure Date"]
-)
+# --- Date utilisée
+date_field = st.sidebar.selectbox("Date utilisée", ["Arrival Date", "Reservation Date", "Departure Date"])
 
 # ============================================================
-# 2.10 Choose Date Range (avec All par défaut)
+# Quick Date Range (avec All par défaut) + Date input manuel
+# IMPORTANT : On met un label différent de ton screenshot pour être sûr.
 # ============================================================
-# Objectif :
-# - ajouter une option "All" qui prend :
-#   start = date min du dataset, end = date max du dataset
-# - All doit être le choix par défaut
-#
-# Ensuite, l'utilisateur peut ajuster à la main via date_input.
 dmin = pd.to_datetime(df[date_field]).min().date()
 dmax = pd.to_datetime(df[date_field]).max().date()
 
 quick_range = st.sidebar.selectbox(
-    "Choose Date Range",
+    "Quick Date Range",
     options=["All", "Past Week", "Past Month", "Past 3 Months", "Past 6 Months", "Past Year", "Past 2 Years"],
-    index=0  # All par défaut
+    index=0
 )
 
-# On calcule la plage de dates selon le preset choisi
-# (on se base sur la date max du dataset pour rester cohérent)
 end_default = dmax
 
 if quick_range == "All":
@@ -195,10 +165,9 @@ elif quick_range == "Past 6 Months":
     start_default = max(dmin, (pd.to_datetime(dmax) - pd.Timedelta(days=180)).date())
 elif quick_range == "Past Year":
     start_default = max(dmin, (pd.to_datetime(dmax) - pd.Timedelta(days=365)).date())
-else:  # Past 2 Years
+else:
     start_default = max(dmin, (pd.to_datetime(dmax) - pd.Timedelta(days=730)).date())
 
-# Date input final : l'utilisateur peut ajuster manuellement
 date_range = st.sidebar.date_input(
     "Plage de dates",
     value=(start_default, end_default),
@@ -206,182 +175,134 @@ date_range = st.sidebar.date_input(
     max_value=dmax
 )
 
-# Sécurité : date_input peut renvoyer un tuple (start,end) ou une seule date
+# Sécurité : tuple ou date seule
 if isinstance(date_range, tuple) and len(date_range) == 2:
     start_date, end_date = date_range
 else:
-    start_date = date_range
-    end_date = date_range
+    start_date, end_date = date_range, date_range
 
 start_date = pd.to_datetime(start_date)
 end_date = pd.to_datetime(end_date)
 
-# -----------------------------
-# 2.11 Jour du mois
-# -----------------------------
+# --- Jour du mois
 day_min, day_max = st.sidebar.slider("Jour du mois", 1, 31, (1, 31))
 
-# -----------------------------
-# 2.12 Mois (optionnel)
-# -----------------------------
+# --- Mois (multi)
 months = st.sidebar.multiselect(
-    "Mois (optionnel)",
+    "Mois (optionnel, multi)",
     options=list(range(1, 13)),
     format_func=lambda x: pd.Timestamp(year=2024, month=x, day=1).strftime("%B"),
     default=[]
 )
 
-# -----------------------------
-# 2.13 Options courbe
-# -----------------------------
+# --- Courbe
 y_mode = st.sidebar.selectbox("Axe Y", ["reservations", "nights", "revenue"])
 bin_size = st.sidebar.slider("Bins ADR (€)", 5, 50, 15, 5)
-
-# -----------------------------
-# 2.14 Référence (median/mean)
-# -----------------------------
 reference_mode = st.sidebar.selectbox("Référence", ["median", "mean"])
 
-# IMPORTANT : on fixe toujours la référence pondérée par nuitées (Nights).
-# Donc pas de selectbox ici.
-REF_WEIGHT_FIXED = "Nights"
-
-# -----------------------------
-# 2.15 Debug : table agg (masquée par défaut)
-# -----------------------------
-show_agg_table = st.sidebar.checkbox(
-    "Afficher table d'agrégation (debug)",
-    value=False,
-    help="Affiche la table agg (bins ADR) sous la courbe. Utile pour debug."
-)
+# --- Debug
+show_agg_table = st.sidebar.checkbox("Afficher table agg (debug)", value=False)
+show_debug_details = st.sidebar.checkbox("Afficher debug prix (top bins)", value=False)
 
 # ============================================================
-# 3) GESTION EVENT
+# Gestion Event
 # ============================================================
 st.sidebar.header("Gestion Event")
-
-event_mode = st.sidebar.selectbox(
-    "Traitement des events",
-    ["Inclure", "Exclure", "Remplacer (moyenne autres années)"]
-)
+event_mode = st.sidebar.selectbox("Traitement des events", ["Inclure", "Exclure", "Remplacer (moyenne autres années)"])
 
 events_available = sorted([e for e in df["Event"].astype(str).unique().tolist() if e != "None"])
 event_to_replace = None
 if event_mode == "Remplacer (moyenne autres années)":
-    event_to_replace = st.sidebar.selectbox(
-        "Quel event remplacer ?",
-        options=events_available if events_available else ["(aucun event)"]
-    )
+    event_to_replace = st.sidebar.selectbox("Quel event remplacer ?", options=events_available if events_available else ["(aucun event)"])
 
 # ============================================================
-# 4) APPLICATION DES FILTRES
+# 3) Application des filtres
 # ============================================================
-
-# 4.1 Filtres simples
 filters = {
     "Property": None if property_ == "All" else property_,
-    "Room Type": None if room_type == "All" else room_type,
-    "Source Code": None if sc == "All" else sc,
     "Season": None if season == "All" else season,
 }
 df2 = apply_filters(df, filters)
 
-# 4.2 Segment / Market Code
-if segment != "All" and mc == "All":
-    allowed = SEGMENT_TO_MARKET_CODES.get(segment, [])
-    df2 = df2[df2["Market Code"].astype(str).isin(allowed)]
-elif mc != "All":
-    df2 = df2[df2["Market Code"].astype(str) == str(mc)]
+# Segment / Market Codes :
+# - Si user sélectionne des Market Codes => on filtre sur ces MC
+# - Sinon :
+#   * si Segment=All => rien à filtrer
+#   * si Segment=X => on prend tous les codes du segment X
+if market_codes:
+    df2 = df2[df2["Market Code"].astype(str).isin([str(x) for x in market_codes])]
+else:
+    if segment != "All":
+        allowed = SEGMENT_TO_MARKET_CODES.get(segment, [])
+        df2 = df2[df2["Market Code"].astype(str).isin(allowed)]
 
-# 4.3 Nationality
+# Room types
+if room_types:
+    df2 = df2[df2["Room Type"].astype(str).isin([str(x) for x in room_types])]
+
+# Source codes
+if source_codes:
+    df2 = df2[df2["Source Code"].astype(str).isin([str(x) for x in source_codes])]
+
+# Nationalities
 if nationalities:
-    df2 = df2[df2["Nationality"].astype(str).isin(nationalities)]
+    df2 = df2[df2["Nationality"].astype(str).isin([str(x) for x in nationalities])]
 
-# 4.4 Lead time
+# Lead time
 if lead_range is not None and lt_col in df2.columns:
     df2 = df2[(df2[lt_col] >= lead_range[0]) & (df2[lt_col] <= lead_range[1])]
 
-# 4.5 Plage de dates (sur la date choisie)
+# Date range
 df2 = df2[(df2[date_field] >= start_date) & (df2[date_field] <= end_date)]
 
-# 4.6 Jour du mois
+# Jour du mois
 df2 = df2[(df2[date_field].dt.day >= day_min) & (df2[date_field].dt.day <= day_max)]
 
-# 4.7 Mois
+# Mois
 if months:
     df2 = df2[df2[date_field].dt.month.isin(months)]
 
-# 4.8 weight (utile pour event replacement)
+# Event
 df2["weight"] = 1.0
-
-# 4.9 Events
 info_msg = None
+
 if event_mode == "Exclure":
     df2 = df2[df2["Event"] == "None"].copy()
 elif event_mode == "Remplacer (moyenne autres années)":
     if events_available and event_to_replace and "(aucun" not in str(event_to_replace):
-        df2, info_msg = replace_event_period_with_other_years(
-            df2,
-            event_to_replace,
-            date_col="Arrival Date"
-        )
+        df2, info_msg = replace_event_period_with_other_years(df2, event_to_replace, date_col="Arrival Date")
 
-# Infos
 st.write(f"Lignes après filtres : **{len(df2):,}**")
 if info_msg:
     st.info(info_msg)
 
-# Pas assez de data = pas de courbe fiable
 if len(df2) < 20:
     st.warning("Pas assez de données après filtres pour tracer une courbe.")
     st.dataframe(df2.head(200))
     st.stop()
 
 # ============================================================
-# 5) AGREGER (bins ADR) => agg
+# 4) Agrégation (bins ADR)
 # ============================================================
 agg = aggregate_curve(df2, bin_size=bin_size, y_mode=y_mode)
 
 # ============================================================
-# 6) AFFICHAGE : 3 tabs
+# 5) Affichage : 3 tabs
 # ============================================================
-tab1, tab2, tab3 = st.tabs([
-    "Courbe sensibilité",
-    "Top Nationalities",
-    "Saisonnalité (heatmap)"
-])
+tab1, tab2, tab3 = st.tabs(["Courbe sensibilité", "Top Nationalities", "Saisonnalité (heatmap)"])
 
-# ------------------------------------------------------------
-# TAB 1 : Courbe + KPI + table agg debug optionnelle
-# ------------------------------------------------------------
 with tab1:
     st.subheader("Courbe de sensibilité prix")
 
-    # -----------------------------
-    # Zoom intelligent (anti-outliers)
-    # -----------------------------
-    # Problème :
-    # - Si quelques ADR extrêmes existent (6000-10000€),
-    #   matplotlib dézoome l'axe X et on ne voit plus la zone 200-700€.
-    #
-    # Solution :
-    # - calculer xmin/xmax sur la distribution réelle des ADR filtrés (df2["ADR"])
-    # - prendre les quantiles 1% et 99% (garde 99% des data)
+    # Zoom intelligent basé sur df2["ADR"] (quantiles)
     adr_raw = df2["ADR"].dropna().to_numpy(dtype=float)
+    xmin = float(np.nanpercentile(adr_raw, 1))
+    xmax = float(np.nanpercentile(adr_raw, 99))
 
-    if len(adr_raw) >= 20:
-        xmin = float(np.nanpercentile(adr_raw, 1))
-        xmax = float(np.nanpercentile(adr_raw, 99))
-    else:
-        xmin = float(np.nanmin(agg["ADR_mean"]))
-        xmax = float(np.nanmax(agg["ADR_mean"]))
-
-    # On limite aussi les points affichés pour éviter la "ligne plate" à droite
     agg_plot = agg[(agg["ADR_mean"] >= xmin) & (agg["ADR_mean"] <= xmax)].copy()
     if len(agg_plot) < 5:
         agg_plot = agg.copy()
 
-    # Plot
     fig = plt.figure(figsize=(9, 5))
     plt.plot(agg_plot["ADR_mean"], agg_plot["Y"], marker="o")
     plt.xlabel("ADR (euros)")
@@ -390,17 +311,10 @@ with tab1:
     plt.xlim(xmin, xmax)
     st.pyplot(fig)
 
-    # -----------------------------
-    # KPI : Prix référence / optimal / gain
-    # -----------------------------
     st.subheader("Prix optimal et comparaison au prix de référence")
 
-    # Ici ref_weight est fixe = "Nights" (pondéré par nuitées)
-    res = compute_reference_and_best(
-        agg,
-        reference=reference_mode,
-        ref_weight=REF_WEIGHT_FIXED
-    )
+    # IMPORTANT : Référence pondérée par nuitées (Nights) FIXE
+    res = compute_reference_and_best(agg, reference=reference_mode, ref_weight="Nights")
 
     if res:
         c1, c2, c3 = st.columns(3)
@@ -409,26 +323,22 @@ with tab1:
         c3.metric("Gain (bin)", f"{res['gain']:,.0f} euros", f"{res['gain_pct']:.1f}%")
 
         st.caption(
-            "Note : si le prix de référence = prix optimal, c'est souvent normal "
-            "(bin typique = bin revenu max) ou bien il reste peu de données après filtres."
+            "Si référence = meilleur prix : c'est parfois normal (bin typique = bin revenu max). "
+            "Si ça arrive tout le temps, active le debug pour vérifier les bins."
         )
-    else:
-        st.info("Impossible de calculer la référence et l'optimum (pas assez de bins).")
 
-    # -----------------------------
-    # Table d'agrégation (debug) — masquée par défaut
-    # -----------------------------
+        if show_debug_details:
+            st.markdown("### Debug prix (top bins revenue)")
+            st.write("Référence pondérée par : **Nights**")
+            st.write("Top 5 bins par Revenue :")
+            st.dataframe(agg.sort_values("Revenue", ascending=False).head(5))
+    else:
+        st.info("Impossible de calculer la référence et l'optimum.")
+
     if show_agg_table:
-        st.markdown("### Table d’agrégation (debug)")
-        st.caption(
-            "Chaque ligne correspond à un bin d'ADR. "
-            "Tu peux vérifier Volume/Nights/Revenue/ADR_mean pour comprendre la courbe."
-        )
+        st.markdown("### Table agg (debug)")
         st.dataframe(agg)
 
-# ------------------------------------------------------------
-# TAB 2 : Top Nationalities
-# ------------------------------------------------------------
 with tab2:
     st.subheader("Top Nationalities")
     nat = df2["Nationality"].astype(str).value_counts().head(15)
@@ -440,9 +350,6 @@ with tab2:
     plt.grid(True, axis="x")
     st.pyplot(fig)
 
-# ------------------------------------------------------------
-# TAB 3 : Heatmap Saisonnalité
-# ------------------------------------------------------------
 with tab3:
     st.subheader("Saisonnalité : Mois x Jour de semaine (volume)")
 
@@ -450,7 +357,6 @@ with tab3:
     tmp["Weekday"] = tmp["Arrival Date"].dt.day_name()
     tmp["Month Number"] = tmp["Arrival Date"].dt.month
 
-    # Ordre logique des weekdays
     weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     tmp["Weekday"] = pd.Categorical(tmp["Weekday"], categories=weekday_order, ordered=True)
 
