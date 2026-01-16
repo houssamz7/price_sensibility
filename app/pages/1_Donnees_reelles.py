@@ -17,7 +17,7 @@ from src.analytics import (
 # - Courbe de sensibilité + Top Nationalities + Saisonnalité (heatmap)
 
 
-st.title("Données réelles — Dashboard")
+st.title("Données réelles - Dashboard")
 
 # 0) Récupérer les données CLEAN (préparées depuis Home)
 if "df_clean_final" not in st.session_state:
@@ -112,6 +112,7 @@ if event_mode == "Remplacer par moyenne autres années":
 filters = {
     "Property": None if property_ == "All" else property_,
     "Market Code": None if mc == "All" else mc,
+    "Room Type": None if mc == "All" else rt,
     "Source Code": None if sc == "All" else sc,
     "Season": None if season == "All" else season,
 }
