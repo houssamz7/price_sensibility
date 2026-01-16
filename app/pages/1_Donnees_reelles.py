@@ -121,18 +121,18 @@ nationalities = st.sidebar.multiselect(
 )
 
 # --- Lead Time (Days) (slider)
-lt_col = "Lead Time (Days)"
+lt_col = "Lead Time(Days)"
 lead_range = None
 if lt_col in df.columns:
     lt_min = int(np.nanmin(df[lt_col]))
     lt_max = int(np.nanmax(df[lt_col]))
     lead_range = st.sidebar.slider(
-        "Lead Time (Days)",
+        "Lead Time(Days)",
         lt_min, lt_max,
         (lt_min, lt_max)
     )
 else:
-    st.sidebar.info("Colonne 'Lead Time (Days)' non trouvée.")
+    st.sidebar.info("Colonne 'Lead Time(Days)' non trouvée.")
 
 # --- Dates : on choisit quelle date filtrer (Arrival / Reservation / Departure)
 date_field = st.sidebar.selectbox(
