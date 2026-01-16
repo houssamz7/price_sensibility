@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src.pipeline_clean import build_clean_dataset_from_df
 
 
-st.set_page_config(page_title="Sensibilité Prix — Home", layout="wide")
+st.set_page_config(page_title="Sensibilité Prix - Home", layout="wide")
 st.title("Sensibilité au prix - Outil RM")
 
 st.markdown("""
