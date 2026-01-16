@@ -93,38 +93,134 @@ def aggregate_curve(df: pd.DataFrame, bin_size: int, y_mode: str) -> pd.DataFram
     agg = agg.sort_values("ADR_mean").reset_index(drop=True)
     return agg
 
+import numpy as np
+import pandas as pd
 
-def compute_reference_and_best(agg: pd.DataFrame, reference: str = "median") -> dict:
+
+def _weighted_median(x: np.ndarray, w: np.ndarray) -> float:
     """
-    Prix référence (median/mean ADR_mean)
-    Meilleur prix = bin qui maximise Revenue
-    Gain vs référence
+    Calcule la médiane pondérée.
+
+    Intuition :
+    - Médiane classique : on trie x, puis on prend la valeur au "milieu" (50% à gauche / 50% à droite).
+    - Médiane pondérée : on trie x, MAIS chaque valeur a un "poids" w.
+      Exemple : si un bin a 200 réservations et un autre a 2 réservations,
+      le bin à 200 "compte beaucoup plus" dans la médiane.
+
+    Résultat :
+    - On renvoie la première valeur x telle que la somme cumulée des poids atteigne 50% du poids total.
     """
+
+    # 1) Convertir en tableaux numpy float (pour être sûr des types)
+    x = np.asarray(x, dtype=float)  # valeurs (ex: ADR_mean)
+    w = np.asarray(w, dtype=float)  # poids (ex: Nights ou Reservations)
+
+    # 2) Filtrer les valeurs invalides
+    # np.isfinite(...) = True si la valeur est un nombre valide (pas NaN, pas +inf, pas -inf)
+    #
+    # mask est un tableau de True/False de la même longueur que x et w.
+    # On garde uniquement les lignes où :
+    # - x est valide (finite)
+    # - w est valide (finite)
+    # - w > 0 (poids positif)
+    #
+    # Pourquoi w > 0 ?
+    # - un poids 0 veut dire "ne compte pas du tout" (inutile pour la médiane)
+    # - un poids négatif n'a pas de sens pour une pondération de volume/nuitées
+    mask = np.isfinite(x) & np.isfinite(w) & (w > 0)
+
+    # On applique le masque : on retire les éléments invalides
+    x, w = x[mask], w[mask]
+
+    # 3) Si après nettoyage il ne reste rien, on renvoie NaN
+    if len(x) == 0:
+        return np.nan
+
+    # 4) Trier x et réordonner w exactement dans le même ordre
+    # order = indices qui trient x
+    order = np.argsort(x)
+    x_sorted = x[order]
+    w_sorted = w[order]
+
+    # 5) Somme cumulée des poids
+    # Exemple :
+    # x_sorted = [100, 200, 300]
+    # w_sorted = [  1,   2,  10]
+    # cum_w    = [  1,   3,  13]
+    cum_w = np.cumsum(w_sorted)
+
+    # 6) Le seuil "50% du poids total"
+    # Si total poids = 13, cutoff = 6.5
+    cutoff = 0.5 * np.sum(w_sorted)
+
+    # 7) Trouver le premier index où cum_w >= cutoff
+    # np.searchsorted renvoie l'endroit où on doit insérer cutoff dans cum_w
+    # pour garder l'ordre croissant.
+    idx = np.searchsorted(cum_w, cutoff)
+
+    # 8) La médiane pondérée est alors x_sorted[idx]
+    return float(x_sorted[idx])
+
+
+def compute_reference_and_best(
+    agg: pd.DataFrame,
+    reference: str = "median",
+    ref_weight: str = "Nights"
+) -> dict:
+    """
+    Calcule :
+    - Prix de référence : médiane ou moyenne PONDÉRÉE par 'Nights' ou 'Reservations'
+    - Meilleur prix : le bin qui maximise 'Revenue'
+    - Gain vs référence : différence entre revenue du meilleur bin et revenue du bin de référence
+
+    Paramètres :
+    - reference : "median" ou "mean"
+    - ref_weight : "Nights" ou "Reservations" (colonne de agg)
+
+    Remarque importante :
+    - Ici, on calcule la référence à partir de la table agrégée (bins).
+      Mais en pondérant par Nights/Reservations, on se rapproche d’une référence "réaliste RM".
+    """
+
+    # 0) Cas vide : pas de données
     if len(agg) == 0:
         return {}
 
-    # Prix de référence
-    if reference == "median":
-        ref_price = float(agg["ADR_mean"].median())
+    # 1) Choisir les poids (Nights / Reservations)
+    # Si la colonne demandée n'existe pas, on fait un fallback (poids = 1)
+    # => médiane non pondérée (moins bien, mais évite de casser le code)
+    if ref_weight not in agg.columns:
+        weights = np.ones(len(agg), dtype=float)
     else:
-        ref_price = float(agg["ADR_mean"].mean())
+        weights = agg[ref_weight].to_numpy(dtype=float)
 
-    # Meilleur bin = celui qui a le revenue max
+    # Valeurs de prix (ADR moyen par bin)
+    prices = agg["ADR_mean"].to_numpy(dtype=float)
+
+    # 2) Calcul du prix de référence (pondéré)
+    if reference == "median":
+        # médiane pondérée : "prix typique" avec l'importance des volumes
+        ref_price = _weighted_median(prices, weights)
+    else:
+        # moyenne pondérée
+        wsum = np.sum(weights)
+        ref_price = float(np.sum(prices * weights) / wsum) if wsum > 0 else float(np.nanmean(prices))
+
+    # 3) Meilleur prix = bin qui maximise le revenue
     best_row = agg.sort_values("Revenue", ascending=False).iloc[0]
     best_price = float(best_row["ADR_mean"])
     best_revenue = float(best_row["Revenue"])
 
-    # Trouver le bin dont ADR_mean est le plus proche de ref_price
-    # 1) (agg["ADR_mean"] - ref_price) : distance à ref_price
-    # 2) .abs() : distance en valeur absolue
-    # 3) .idxmin() : index de la plus petite distance
+    # 4) Revenue de référence :
+    # On choisit le bin dont le prix est le plus proche de ref_price
     idx = (agg["ADR_mean"] - ref_price).abs().idxmin()
-    # Utiliser cet index pour récupérer le revenue du bin "référence"
     ref_revenue = float(agg.loc[idx, "Revenue"])
 
+    # 5) Gain : différence de revenue entre meilleur bin et référence
     gain = best_revenue - ref_revenue
     gain_pct = (gain / ref_revenue * 100) if ref_revenue > 0 else np.nan
 
+    # 6) Résultat final
     return {
         "ref_price": ref_price,
         "ref_revenue": ref_revenue,
