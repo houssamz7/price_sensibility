@@ -94,9 +94,11 @@ market_codes = st.sidebar.multiselect(
 
 # Room Type (multi)
 room_type_pool = sorted(df["Room Type"].astype(str).unique().tolist())
-room_types = st.sidebar.selectbox(
-    "Room Type",
-    ["All"] + sorted(df["Room Type"].astype(str).unique().tolist())
+room_types = st.sidebar.multiselect(
+    "Room Type (multi)",
+    options=room_type_pool,
+    default=[],
+    help="Si vide => tous les Room Types"
 )
 
 # Source Code (multi)
