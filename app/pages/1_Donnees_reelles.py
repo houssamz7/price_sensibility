@@ -1,14 +1,13 @@
 # app/pages/1_Donnees_reelles.py
-# ============================================================
 # DONNEES REELLES (V1) - Page Streamlit
-# ============================================================
+# 
 # Objectifs :
 # 1) Filtrer les données (Property, Segment, dates, etc.)
 # 2) Tracer la courbe de sensibilité prix (ADR vs Y)
 # 3) Calculer un prix de référence (pondéré par nuitées) + meilleur prix historique
 # 4) Afficher 2 visuels simples (Top Nationalities, Saisonnalité heatmap)
 # 5) Avoir des outils debug (table agg et top bins) masqués par défaut
-# ============================================================
+# 
 
 import streamlit as st
 import pandas as pd
@@ -24,9 +23,8 @@ from src.analytics import (
 
 st.title("Données réelles")
 
-# ============================================================
+
 # 0) Segments : mapping Segment -> Market Codes
-# ============================================================
 SEGMENT_TO_MARKET_CODES = {
     "Indiv. Public": [
         "3CNR", "3CRE", "3FLA", "3NNR", "3NRE",
@@ -52,9 +50,8 @@ SEGMENT_ORDER = [
     "Equipages",
 ]
 
-# ============================================================
+
 # 1) Charger le dataset clean depuis session_state
-# ============================================================
 if "df_clean_final" not in st.session_state:
     st.warning("Va d'abord sur la page Home pour uploader le fichier et générer le CLEAN.")
     st.stop()
@@ -66,22 +63,21 @@ for c in ["Arrival Date", "Reservation Date", "Departure Date"]:
     if c in df.columns:
         df[c] = pd.to_datetime(df[c], errors="coerce")
 
-# ============================================================
+
 # 2) Sidebar : filtres
-# ============================================================
 st.sidebar.header("Filtres")
 
-# --- Property (1 choix)
+# Property (1 choix)
 property_ = st.sidebar.selectbox(
     "Property",
     ["All"] + sorted(df["Property"].astype(str).unique().tolist())
 )
 
-# --- Segment (1 choix) : logique RM => un segment à la fois
+# Segment (1 choix) : logique RM => un segment à la fois
 segment_options = ["All"] + [s for s in SEGMENT_ORDER if s in SEGMENT_TO_MARKET_CODES]
 segment = st.sidebar.selectbox("Segment", segment_options)
 
-# --- Market Code (multi)
+# Market Code (multi)
 # Si Segment = All -> on propose tous les codes
 # Sinon -> seulement les codes du segment choisi
 if segment == "All":
@@ -96,16 +92,14 @@ market_codes = st.sidebar.multiselect(
     help="Tu peux choisir 1 ou plusieurs Market Codes. Si tu ne choisis rien => on prend tout."
 )
 
-# --- Room Type (multi)
+# Room Type (multi)
 room_type_pool = sorted(df["Room Type"].astype(str).unique().tolist())
 room_types = st.sidebar.selectbox(
-    "Room Type (multi)",
-    options=room_type_pool,
-    default=[],
-    help="Si vide => tous les Room Types"
+    "Room Type",
+    ["All"] + sorted(df["Room Type"].astype(str).unique().tolist())
 )
 
-# --- Source Code (multi)
+# Source Code (multi)
 sc_pool = sorted(df["Source Code"].astype(str).unique().tolist())
 source_codes = st.sidebar.multiselect(
     "Source Code (multi)",
@@ -114,10 +108,10 @@ source_codes = st.sidebar.multiselect(
     help="Si vide => toutes les sources"
 )
 
-# --- Season (1 choix)
+# Season (1 choix)
 season = st.sidebar.selectbox("Season", ["All", "LOW", "HIGH"])
 
-# --- Nationality (multi)
+# Nationality (multi)
 nat_pool = sorted(df["Nationality"].astype(str).unique().tolist())
 nationalities = st.sidebar.multiselect(
     "Nationality (multi)",
@@ -125,7 +119,7 @@ nationalities = st.sidebar.multiselect(
     default=[]
 )
 
-# --- Lead Time (Days)
+# Lead Time (Days)
 lt_col = "Lead Time(Days)"
 lead_range = None
 if lt_col in df.columns:
@@ -135,13 +129,12 @@ if lt_col in df.columns:
 else:
     st.sidebar.info(f"Colonne '{lt_col}' non trouvée.")
 
-# --- Date utilisée
+# Date utilisée
 date_field = st.sidebar.selectbox("Date utilisée", ["Arrival Date", "Reservation Date", "Departure Date"])
 
-# ============================================================
+
 # Quick Date Range (avec All par défaut) + Date input manuel
 # IMPORTANT : On met un label différent de ton screenshot pour être sûr.
-# ============================================================
 dmin = pd.to_datetime(df[date_field]).min().date()
 dmax = pd.to_datetime(df[date_field]).max().date()
 
@@ -184,10 +177,10 @@ else:
 start_date = pd.to_datetime(start_date)
 end_date = pd.to_datetime(end_date)
 
-# --- Jour du mois
+# our du mois
 day_min, day_max = st.sidebar.slider("Jour du mois", 1, 31, (1, 31))
 
-# --- Mois (multi)
+# Mois (multi)
 months = st.sidebar.multiselect(
     "Mois (optionnel, multi)",
     options=list(range(1, 13)),
@@ -195,18 +188,17 @@ months = st.sidebar.multiselect(
     default=[]
 )
 
-# --- Courbe
+# Courbe
 y_mode = st.sidebar.selectbox("Axe Y", ["reservations", "nights", "revenue"])
 bin_size = st.sidebar.slider("Bins ADR (€)", 5, 50, 15, 5)
 reference_mode = st.sidebar.selectbox("Référence", ["median", "mean"])
 
-# --- Debug
+# Debug
 show_agg_table = st.sidebar.checkbox("Afficher table agg (debug)", value=False)
 show_debug_details = st.sidebar.checkbox("Afficher debug prix (top bins)", value=False)
 
-# ============================================================
+
 # Gestion Event
-# ============================================================
 st.sidebar.header("Gestion Event")
 event_mode = st.sidebar.selectbox("Traitement des events", ["Inclure", "Exclure", "Remplacer (moyenne autres années)"])
 
@@ -215,9 +207,8 @@ event_to_replace = None
 if event_mode == "Remplacer (moyenne autres années)":
     event_to_replace = st.sidebar.selectbox("Quel event remplacer ?", options=events_available if events_available else ["(aucun event)"])
 
-# ============================================================
+
 # 3) Application des filtres
-# ============================================================
 filters = {
     "Property": None if property_ == "All" else property_,
     "Season": None if season == "All" else season,
@@ -281,14 +272,12 @@ if len(df2) < 20:
     st.dataframe(df2.head(200))
     st.stop()
 
-# ============================================================
+
 # 4) Agrégation (bins ADR)
-# ============================================================
 agg = aggregate_curve(df2, bin_size=bin_size, y_mode=y_mode)
 
-# ============================================================
+
 # 5) Affichage : 3 tabs
-# ============================================================
 tab1, tab2, tab3 = st.tabs(["Courbe sensibilité", "Top Nationalities", "Saisonnalité (heatmap)"])
 
 with tab1:
